@@ -1,3 +1,13 @@
+app.post("/debug", express.json(), (req, res) => {
+  console.log("🛠 Sleeknote sent this payload:");
+  console.log(JSON.stringify(req.body, null, 2));
+
+  res.status(200).send({
+    message: "Received payload",
+    receivedData: req.body
+  });
+});
+
 const express = require("express");
 const fetch = require("node-fetch");
 const app = express();
