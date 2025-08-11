@@ -4,30 +4,36 @@ const app = express();
 app.use(express.json());
 
 app.post('/', async (req, res) => {
-  const { firstName, lastName, email, phone, notes } = req.body;
-  // TODO: Replace with secure server-side OAuth for Entrata
-  const token = process.env.ENTRATA_TOKEN || 'TEST_TOKEN';
+  const { firstName, lastName, email, phone, notes, propertyId } = req.body;
+
   try {
-    const resp = await fetch('https://api.entrata.com/leads', {
+    const leadData = {
+      firstName,
+      lastName,
+      email,
+      phone,
+      notes,
+      propertyId
+    };
+
+    const response = await fetch(`${process.env.ENTRATA_BASE_URL}/leads`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
+        'X-Api-Key': process.env.ENTRATA_API_KEY,
+        'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        firstName,
-        lastName,
-        email,
-        phone,
-        notes,
-        propertyId: process.env.ENTRATA_PROPERTY_ID || 'PROPERTY_ID',
-      }),
+      body: JSON.stringify(leadData)
     });
-    if (!resp.ok) throw new Error(await resp.text());
-    res.status(200).send('OK');
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Entrata error: ${errorText}`);
+    }
+
+    res.status(200).send('Lead sent to Entrata successfully');
   } catch (err) {
     console.error(err);
-    res.status(500).send('Failed');
+    res.status(500).send('Failed to send lead to Entrata');
   }
 });
 
