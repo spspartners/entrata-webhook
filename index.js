@@ -7,7 +7,7 @@ app.use(express.json());
 // --- Health ---
 app.get("/", (_req, res) => res.send("OK"));
 
-// --- Date normalizer (optional) ---
+// --- Helpers ---
 function toMMDDYYYY(d) {
   if (!d) return "";
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/;           // 2025-09-15
@@ -15,8 +15,20 @@ function toMMDDYYYY(d) {
   const dot = /^(\d{2})\.(\d{2})\.(\d{4})$/;         // 15.09.2025
   if (iso.test(d)) { const [, y, m, day] = d.match(iso); return `${m}/${day}/${y}`; }
   if (slash.test(d)) return d;
-  if (dot.test(d)) { const [, dd, mm, yyyy] = d.match(dot); return `${mm}/${dd}/${yyyy}`; }
+  if (dot.test(d))  { const [, dd, mm, yyyy] = d.match(dot); return `${mm}/${dd}/${yyyy}`; }
   return `${d}`;
+}
+
+// Entrata requires "MM/DD/YYYYTHH:MM:SS"
+function toEntrataTimestamp(date = new Date()) {
+  const pad = n => String(n).padStart(2, "0");
+  const mm = pad(date.getMonth() + 1);
+  const dd = pad(date.getDate());
+  const yyyy = date.getFullYear();
+  const hh = pad(date.getHours());
+  const mi = pad(date.getMinutes());
+  const ss = pad(date.getSeconds());
+  return `${mm}/${dd}/${yyyy}T${hh}:${mi}:${ss}`;
 }
 
 /**
@@ -30,17 +42,16 @@ function buildEntrataRequestPieces() {
   if (!ORG) throw new Error("Missing ENTRATA_ORG");
 
   const apiKey = process.env.ENTRATA_API_KEY;
-  const user = process.env.ENTRATA_USERNAME;
-  const pass = process.env.ENTRATA_PASSWORD;
+  const user   = process.env.ENTRATA_USERNAME;
+  const pass   = process.env.ENTRATA_PASSWORD;
 
-  // Prefer API key if provided; else use Basic
   if (apiKey) {
     const url = `https://apis.entrata.com/ext/orgs/${ORG}/v1/leads`;
     const headers = {
       "Content-Type": "application/json",
       "X-Api-Key": apiKey
     };
-    // Many /ext/orgs payloads still require an auth block with just the type
+    // /ext/orgs expects an auth block with just the type
     const authBlock = { type: "apikey" };
     return { url, headers, authBlock };
   }
@@ -52,7 +63,7 @@ function buildEntrataRequestPieces() {
       "Content-Type": "application/json",
       "Authorization": `Basic ${basic}`
     };
-    // Some “standard API” payloads expect credentials in the body, too — safe to include.
+    // Some tenants also accept basic credentials in body:
     const authBlock = { type: "basic", username: user, password: pass };
     return { url, headers, authBlock };
   }
@@ -60,7 +71,7 @@ function buildEntrataRequestPieces() {
   throw new Error("No Entrata credentials found. Set ENTRATA_API_KEY or ENTRATA_USERNAME/ENTRATA_PASSWORD.");
 }
 
-// --- Shared lead handler (Sleeknote -> Entrata) ---
+// --- Lead handler ---
 async function handleLead(req, res) {
   try {
     const {
@@ -81,7 +92,7 @@ async function handleLead(req, res) {
 
     const { url, headers, authBlock } = buildEntrataRequestPieces();
 
-    // Minimal, valid sendLeads payload with customerPreferences (no beds/baths)
+    // Minimal, valid sendLeads payload with createdDate + customerPreferences
     const payload = {
       auth: authBlock,
       requestId: "1",
@@ -94,6 +105,7 @@ async function handleLead(req, res) {
           isWaitList: "0",
           prospects: {
             prospect: {
+              createdDate: toEntrataTimestamp(), // <-- required timestamp
               customers: {
                 customer: {
                   name: { firstName, lastName },
@@ -128,7 +140,7 @@ async function handleLead(req, res) {
   }
 }
 
-// --- Debug endpoint to inspect Sleeknote payloads ---
+// --- Debug endpoint ---
 app.post("/debug", (req, res) => {
   console.log("🛠 Sleeknote sent this payload:");
   console.log(JSON.stringify(req.body, null, 2));
@@ -142,3 +154,4 @@ app.post("/p/:propertyId", handleLead);  // or /p/100016881
 // --- Server ---
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Webhook listening on ${port}`));
+
