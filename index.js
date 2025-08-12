@@ -4,17 +4,15 @@ const app = express();
 
 app.use(express.json());
 
-// Health
+// --- Health ---
 app.get("/", (_req, res) => res.send("OK"));
 
-// Format date to MM/DD/YYYY if you pass ISO (optional helper)
+// Optional: normalize move-in date to MM/DD/YYYY
 function toMMDDYYYY(d) {
   if (!d) return "";
-  // Accept "YYYY-MM-DD", "MM/DD/YYYY", or "dd.mm.yyyy"
-  const iso = /^(\d{4})-(\d{2})-(\d{2})$/;
-  const slash = /^(\d{2})\/(\d{2})\/(\d{4})$/;
-  const dot = /^(\d{2})\.(\d{2})\.(\d{4})$/;
-
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/;           // 2025-09-15
+  const slash = /^(\d{2})\/(\d{2})\/(\d{4})$/;       // 09/15/2025
+  const dot = /^(\d{2})\.(\d{2})\.(\d{4})$/;         // 15.09.2025
   if (iso.test(d)) {
     const [, y, m, day] = d.match(iso);
     return `${m}/${day}/${y}`;
@@ -24,13 +22,13 @@ function toMMDDYYYY(d) {
     const [, dd, mm, yyyy] = d.match(dot);
     return `${mm}/${dd}/${yyyy}`;
   }
-  return `${d}`; // fallback—Entrata will validate
+  return `${d}`;
 }
 
-// Shared lead handler
+// --- Shared lead handler (Sleeknote -> Entrata) ---
 async function handleLead(req, res) {
   try {
-    const ORG = process.env.ENTRATA_ORG;
+    const ORG = process.env.ENTRATA_ORG;        // e.g. "spspartners"
     const API_KEY = process.env.ENTRATA_API_KEY;
     if (!ORG || !API_KEY) {
       console.error("Missing ENTRATA_ORG or ENTRATA_API_KEY");
@@ -47,19 +45,20 @@ async function handleLead(req, res) {
       propertyId
     } = req.body;
 
+    // Accept propertyId from body, query, or path
     const pid = propertyId || req.query.propertyId || req.params?.propertyId;
 
-    const missing = ["firstName", "lastName", "email", "phone", "propertyId"]
+    // Basic validation
+    const missing = ["firstName","lastName","email","phone","propertyId"]
       .filter(k => !(k === "propertyId" ? pid : req.body[k]));
-    if (missing.length) {
-      return res.status(400).send(`Missing: ${missing.join(", ")}`);
-    }
+    if (missing.length) return res.status(400).send(`Missing: ${missing.join(", ")}`);
 
-    const entrataUrl = `https://${ORG}.entrata.com/api/v1/leads`;
+    // ---- Entrata /ext/orgs gateway URL (key in header) ----
+    const entrataUrl = `https://apis.entrata.com/ext/orgs/${ORG}/v1/leads`;
 
-    // Minimal valid sendLeads payload (no bedrooms/bathrooms)
+    // ---- Minimal, valid sendLeads payload ----
     const payload = {
-      auth: { type: "apikey", key: API_KEY },
+      auth: { type: "apikey" }, // key is sent in header, not here
       requestId: "1",
       method: {
         name: "sendLeads",
@@ -89,7 +88,10 @@ async function handleLead(req, res) {
 
     const resp = await fetch(entrataUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Api-Key": API_KEY // <-- required by Entrata gateway
+      },
       body: JSON.stringify(payload)
     });
 
@@ -104,16 +106,17 @@ async function handleLead(req, res) {
   }
 }
 
-// Debug echo
+// --- Debug endpoint to inspect Sleeknote payloads ---
 app.post("/debug", (req, res) => {
   console.log("🛠 Sleeknote sent this payload:");
   console.log(JSON.stringify(req.body, null, 2));
   res.status(200).send({ message: "Received payload", receivedData: req.body });
 });
 
-// Routes
+// --- Routes ---
 app.post("/", handleLead);               // propertyId in body or ?propertyId=
 app.post("/p/:propertyId", handleLead);  // or /p/100016881
 
+// --- Server ---
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Webhook listening on ${port}`));
