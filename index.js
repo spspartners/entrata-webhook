@@ -7,34 +7,62 @@ app.use(express.json());
 // --- Health ---
 app.get("/", (_req, res) => res.send("OK"));
 
-// Optional: normalize move-in date to MM/DD/YYYY
+// --- Date normalizer (optional) ---
 function toMMDDYYYY(d) {
   if (!d) return "";
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/;           // 2025-09-15
   const slash = /^(\d{2})\/(\d{2})\/(\d{4})$/;       // 09/15/2025
   const dot = /^(\d{2})\.(\d{2})\.(\d{4})$/;         // 15.09.2025
-  if (iso.test(d)) {
-    const [, y, m, day] = d.match(iso);
-    return `${m}/${day}/${y}`;
-  }
+  if (iso.test(d)) { const [, y, m, day] = d.match(iso); return `${m}/${day}/${y}`; }
   if (slash.test(d)) return d;
-  if (dot.test(d)) {
-    const [, dd, mm, yyyy] = d.match(dot);
-    return `${mm}/${dd}/${yyyy}`;
-  }
+  if (dot.test(d)) { const [, dd, mm, yyyy] = d.match(dot); return `${mm}/${dd}/${yyyy}`; }
   return `${d}`;
+}
+
+/**
+ * Decide Entrata endpoint + headers + auth block based on env.
+ * Supports:
+ *  - API Key gateway (/ext/orgs/{org}) with header X-Api-Key
+ *  - Basic auth on org URL ({org}.entrata.com) with Authorization: Basic
+ */
+function buildEntrataRequestPieces() {
+  const ORG = process.env.ENTRATA_ORG;
+  if (!ORG) throw new Error("Missing ENTRATA_ORG");
+
+  const apiKey = process.env.ENTRATA_API_KEY;
+  const user = process.env.ENTRATA_USERNAME;
+  const pass = process.env.ENTRATA_PASSWORD;
+
+  // Prefer API key if provided; else use Basic
+  if (apiKey) {
+    const url = `https://apis.entrata.com/ext/orgs/${ORG}/v1/leads`;
+    const headers = {
+      "Content-Type": "application/json",
+      "X-Api-Key": apiKey
+    };
+    // Many /ext/orgs payloads still require an auth block with just the type
+    const authBlock = { type: "apikey" };
+    return { url, headers, authBlock };
+  }
+
+  if (user && pass) {
+    const url = `https://${ORG}.entrata.com/api/v1/leads`;
+    const basic = Buffer.from(`${user}:${pass}`).toString("base64");
+    const headers = {
+      "Content-Type": "application/json",
+      "Authorization": `Basic ${basic}`
+    };
+    // Some “standard API” payloads expect credentials in the body, too — safe to include.
+    const authBlock = { type: "basic", username: user, password: pass };
+    return { url, headers, authBlock };
+  }
+
+  throw new Error("No Entrata credentials found. Set ENTRATA_API_KEY or ENTRATA_USERNAME/ENTRATA_PASSWORD.");
 }
 
 // --- Shared lead handler (Sleeknote -> Entrata) ---
 async function handleLead(req, res) {
   try {
-    const ORG = process.env.ENTRATA_ORG;        // e.g. "spspartners"
-    const API_KEY = process.env.ENTRATA_API_KEY;
-    if (!ORG || !API_KEY) {
-      console.error("Missing ENTRATA_ORG or ENTRATA_API_KEY");
-      return res.status(500).send("Server misconfigured.");
-    }
-
     const {
       firstName,
       lastName,
@@ -45,20 +73,17 @@ async function handleLead(req, res) {
       propertyId
     } = req.body;
 
-    // Accept propertyId from body, query, or path
     const pid = propertyId || req.query.propertyId || req.params?.propertyId;
 
-    // Basic validation
     const missing = ["firstName","lastName","email","phone","propertyId"]
       .filter(k => !(k === "propertyId" ? pid : req.body[k]));
     if (missing.length) return res.status(400).send(`Missing: ${missing.join(", ")}`);
 
-    // ---- Entrata /ext/orgs gateway URL (key in header) ----
-    const entrataUrl = `https://apis.entrata.com/ext/orgs/${ORG}/v1/leads`;
+    const { url, headers, authBlock } = buildEntrataRequestPieces();
 
-    // ---- Minimal, valid sendLeads payload ----
+    // Minimal, valid sendLeads payload with customerPreferences (no beds/baths)
     const payload = {
-      auth: { type: "apikey" }, // key is sent in header, not here
+      auth: authBlock,
       requestId: "1",
       method: {
         name: "sendLeads",
@@ -86,19 +111,16 @@ async function handleLead(req, res) {
       }
     };
 
-    const resp = await fetch(entrataUrl, {
+    const r = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Api-Key": API_KEY // <-- required by Entrata gateway
-      },
+      headers,
       body: JSON.stringify(payload)
     });
 
-    const text = await resp.text();
+    const text = await r.text();
     console.log("Entrata response:", text);
 
-    if (!resp.ok) return res.status(502).send(text || "Entrata rejected the lead");
+    if (!r.ok) return res.status(502).send(text || "Entrata rejected the lead");
     return res.status(200).send(text || "Lead sent to Entrata successfully");
   } catch (err) {
     console.error("Handler error:", err);
