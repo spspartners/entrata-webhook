@@ -16,21 +16,30 @@ function toEntrataTimestamp(date = new Date()) {
   return `${mm}/${dd}/${yyyy}T${hh}:${mi}:${ss}`;
 }
 
+// Optional helper if you want to format move-in dates (MM/DD/YYYY)
+function toMMDDYYYY(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  if (isNaN(d)) return "";
+  const pad = n => String(n).padStart(2, "0");
+  return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}/${d.getFullYear()}`;
+}
+
 app.post("/", async (req, res) => {
   try {
-    const { firstName, lastName, email, phone } = req.body;
+    const { firstName, lastName, email, phone, moveInDate, notes } = req.body;
 
     // Hardcoded property ID for The Ave Apartments
     const propertyId = 100016881;
 
     const payload = {
       auth: {
-        type: "apikey",
-        key: process.env.ENTRATA_API_KEY
+        type: "apikey"
       },
       requestId: "1",
       method: {
         name: "sendLeads",
+        version: "r1",
         params: {
           propertyId: propertyId,
           doNotSendConfirmationEmail: "1",
@@ -49,6 +58,10 @@ app.post("/", async (req, res) => {
                   },
                   email: email
                 }
+              },
+              customerPreferences: {
+                desiredMoveInDate: toMMDDYYYY(moveInDate) || "",
+                comment: notes || ""
               }
             }
           }
@@ -56,7 +69,7 @@ app.post("/", async (req, res) => {
       }
     };
 
-    const entrataUrl = `https://apis.entrata.com/ext/orgs/spspartners/leads`;
+    const entrataUrl = `https://apis.entrata.com/ext/orgs/spspartners/v1/leads`;
 
     const response = await fetch(entrataUrl, {
       method: "POST",
@@ -83,3 +96,4 @@ app.get("/", (_req, res) => res.send("OK"));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Webhook listening on ${port}`));
+
