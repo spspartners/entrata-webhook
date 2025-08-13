@@ -3,9 +3,9 @@ const fetch = require("node-fetch");
 const app = express();
 app.use(express.json());
 
-// Helper to match Entrata's timestamp format & avoid future time errors
+// Make createdDate safely in the past so it can NEVER be > current time
 function toEntrataTimestamp() {
-  const date = new Date(Date.now() - 10 * 60 * 1000); // 10 minutes ago
+  const date = new Date(Date.now() - 24 * 60 * 60 * 1000); // 24 hours ago
   const pad = n => String(n).padStart(2, "0");
   const mm = pad(date.getMonth() + 1);
   const dd = pad(date.getDate());
@@ -16,7 +16,7 @@ function toEntrataTimestamp() {
   return `${mm}/${dd}/${yyyy}T${hh}:${mi}:${ss}`;
 }
 
-// Optional helper if you want to format move-in dates (MM/DD/YYYY)
+// Optional: normalize move-in date to MM/DD/YYYY
 function toMMDDYYYY(dateStr) {
   if (!dateStr) return "";
   const d = new Date(dateStr);
@@ -29,19 +29,17 @@ app.post("/", async (req, res) => {
   try {
     const { firstName, lastName, email, phone, moveInDate, notes } = req.body;
 
-    // Hardcoded property ID for The Ave Apartments
+    // Property ID for The Ave Apartments
     const propertyId = 100016881;
 
     const payload = {
-      auth: {
-        type: "apikey"
-      },
+      auth: { type: "apikey" }, // using /ext/orgs gateway (API key goes in header)
       requestId: "1",
       method: {
         name: "sendLeads",
         version: "r1",
         params: {
-          propertyId: propertyId,
+          propertyId,
           doNotSendConfirmationEmail: "1",
           isWaitList: "0",
           prospects: {
@@ -49,14 +47,9 @@ app.post("/", async (req, res) => {
               createdDate: toEntrataTimestamp(),
               customers: {
                 customer: {
-                  name: {
-                    firstName: firstName,
-                    lastName: lastName
-                  },
-                  phone: {
-                    cellPhoneNumber: phone
-                  },
-                  email: email
+                  name: { firstName, lastName },
+                  phone: { cellPhoneNumber: phone }, // personalPhoneNumber also works if you prefer
+                  email
                 }
               },
               customerPreferences: {
@@ -80,10 +73,12 @@ app.post("/", async (req, res) => {
       body: JSON.stringify(payload)
     });
 
-    const data = await response.json();
-    console.log("Entrata response:", JSON.stringify(data, null, 2));
+    const text = await response.text();
+    console.log("Entrata response:", text);
 
-    res.status(200).json({ success: true, data });
+    // Try to return JSON if possible, else pass raw text
+    try { return res.status(response.ok ? 200 : 502).json(JSON.parse(text)); }
+    catch { return res.status(response.ok ? 200 : 502).send(text); }
 
   } catch (error) {
     console.error("Error sending lead to Entrata:", error);
@@ -91,7 +86,7 @@ app.post("/", async (req, res) => {
   }
 });
 
-// Health check endpoint
+// Health check
 app.get("/", (_req, res) => res.send("OK"));
 
 const port = process.env.PORT || 3000;
