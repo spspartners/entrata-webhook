@@ -1,43 +1,81 @@
-import express from "express";
-import fetch from "node-fetch";
-import bodyParser from "body-parser";
+// index.js (CommonJS)
+
+const express = require("express");
+const fetch = require("node-fetch");
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
-const ENTRATA_USERNAME = "sps_internal_api_4492@spspartners"; // from Entrata API Access
-const ENTRATA_PASSWORD = "YOUR_PASSWORD_HERE"; // from Entrata API Access
-const DEFAULT_PROPERTY_ID = "100016881"; // The Ave
-const DEFAULT_SOURCE = "Sleeknote Popup"; // Will show as lead source in Entrata
+// ────────────────────────────────────────────────────────────
+// CONFIG: set these for your account
+// ────────────────────────────────────────────────────────────
+const ENTRATA_ORG = "spspartners";                       // your subdomain
+const ENTRATA_USERNAME = "sps_internal_api_4492@spspartners"; // API user name
+const ENTRATA_PASSWORD = "YOUR_PASSWORD_HERE";           // API user password
+const DEFAULT_PROPERTY_ID = "100016881";                 // The Ave
+const DEFAULT_SOURCE = "Sleeknote Popup";                // default marketing source
 
-// Debug endpoint to test Sleeknote payload mapping
+// ────────────────────────────────────────────────────────────
+// Helpers
+// ────────────────────────────────────────────────────────────
+function pick(...candidates) {
+  for (const v of candidates) if (v !== undefined && v !== null && `${v}`.trim() !== "") return `${v}`.trim();
+  return undefined;
+}
+
+function toIntOrDefault(val, dflt) {
+  const n = parseInt(val, 10);
+  return Number.isFinite(n) ? n : parseInt(dflt, 10);
+}
+
+// Convert many truthy representations to Entrata's "1"/"0"
+function toOptInFlag(val) {
+  if (val === undefined || val === null) return "0";
+  const s = String(val).toLowerCase().trim();
+  return (s === "1" || s === "true" || s === "yes" || s === "y" || s === "on" || s === "checked") ? "1" : "0";
+}
+
+// ISO a minute in the past to be safe vs server clock skew
+function safeCreatedDateISO() {
+  const dt = new Date(Date.now() - 60 * 1000);
+  return dt.toISOString();
+}
+
+// ────────────────────────────────────────────────────────────
+// Debug endpoint: shows exactly what Sleeknote posts
+// ────────────────────────────────────────────────────────────
 app.post("/debug", (req, res) => {
-  console.log("🛠 Sleeknote sent this payload:", req.body);
-  res.json({ success: true, received: req.body });
+  console.log("🛠 Sleeknote sent this payload:\n", JSON.stringify(req.body, null, 2));
+  res.json({ ok: true, received: req.body });
 });
 
-// Main lead handler
+// ────────────────────────────────────────────────────────────
+// Main lead intake
+// ────────────────────────────────────────────────────────────
 app.post("/", async (req, res) => {
-  console.log("📩 Incoming lead:", req.body);
+  const raw = req.body || {};
+  console.log("📩 Incoming lead body:\n", JSON.stringify(raw, null, 2));
 
-  const {
-    firstName,
-    lastName,
-    email,
-    phone,
-    moveInDate,
-    notes,
-    propertyId,
-    source
-  } = req.body;
+  // Accept multiple possible keys from Sleeknote
+  const firstName = pick(raw.firstName, raw.firstname, raw["First Name"]);
+  const lastName  = pick(raw.lastName, raw.lastname, raw["Last Name"]);
+  const email     = pick(raw.email, raw["Email"]);
+  const phone     = pick(raw.phone, raw.phoneNumber, raw["Phone"]);
+  const moveInDate= pick(raw.moveInDate, raw["Move In Date"]);  // optional
+  const notes     = pick(raw.notes, raw.message, raw["Message"]); // optional
 
-  const finalPropertyId = propertyId || DEFAULT_PROPERTY_ID;
-  const finalSource = source || DEFAULT_SOURCE;
+  // New fields you asked for:
+  const smsOptInFlag = toOptInFlag(pick(raw.smsOptIn, raw.SMS, raw.sms, raw.smsConsent, raw.sms_opt_in));
+  const marketingSource = pick(raw.marketingSource, raw.source, DEFAULT_SOURCE);
 
-  // Format current date/time for createdDate
-  const createdDate = new Date().toISOString();
+  // Property from body, query, or default to The Ave
+  const propertyId = pick(raw.propertyId, req.query.propertyId, DEFAULT_PROPERTY_ID);
+  const finalPropertyIdInt = toIntOrDefault(propertyId, DEFAULT_PROPERTY_ID);
 
-  // Entrata sendLeads payload
+  // Make createdDate safe (slightly in the past)
+  const createdDate = safeCreatedDateISO();
+
+  // Build Entrata sendLeads payload (matches the schema that already worked)
   const payload = {
     auth: {
       type: "basic",
@@ -48,29 +86,37 @@ app.post("/", async (req, res) => {
     method: {
       name: "sendLeads",
       params: {
-        propertyId: parseInt(finalPropertyId, 10),
+        propertyId: finalPropertyIdInt,
         doNotSendConfirmationEmail: "0",
         isWaitList: "0",
         prospects: {
           prospect: {
             leadSource: {
-              leadSourceName: finalSource
+              // You can switch to originatingLeadSourceId if you have a numeric ID:
+              // originatingLeadSourceId: 123,
+              leadSourceName: marketingSource || DEFAULT_SOURCE
             },
-            createdDate: createdDate,
+            createdDate, // ISO; Entrata accepts ISO here
             customers: {
               customer: {
                 name: {
                   firstName: firstName || "NoFirstName",
-                  lastName: lastName || "NoLastName"
+                  lastName:  lastName  || "NoLastName"
                 },
                 phone: {
                   personalPhoneNumber: phone || "000-000-0000"
                 },
-                email: email || "noemail@example.com"
+                email: email || "noemail@example.com",
+                marketingPreferences: {
+                  // This is the closest flag in the Entrata schema for SMS consent
+                  optInphone: smsOptInFlag
+                }
               }
             },
             customerPreferences: {
-              desiredMoveInDate: moveInDate || createdDate,
+              // Entrata usually wants MM/DD/YYYY here; if you can format the
+              // Sleeknote date as that string, great. Otherwise we fall back.
+              desiredMoveInDate: moveInDate || undefined,
               comment: notes || ""
             }
           }
@@ -82,32 +128,30 @@ app.post("/", async (req, res) => {
   console.log("🚀 Sending to Entrata:", JSON.stringify(payload, null, 2));
 
   try {
-    const response = await fetch(
-      "https://apis.entrata.com/api/v1/leads",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
-      }
-    );
+    const url = `https://apis.entrata.com/ext/orgs/${ENTRATA_ORG}/v1/leads`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
 
-    const data = await response.json();
-    console.log("📬 Entrata response:", data);
-    res.json({ success: true, data });
-  } catch (error) {
-    console.error("❌ Error sending to Entrata:", error);
-    res.status(500).json({ success: false, error: error.message });
+    const text = await resp.text(); // log raw for full visibility
+    console.log("📬 Entrata response:", text);
+
+    // Try to return JSON if possible, else raw text
+    try {
+      return res.status(200).json({ ok: true, data: JSON.parse(text) });
+    } catch {
+      return res.status(200).send(text);
+    }
+  } catch (err) {
+    console.error("❌ Error sending to Entrata:", err);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// Health check
-app.get("/", (req, res) => {
-  res.send("OK");
-});
+// Health
+app.get("/", (_req, res) => res.send("OK"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`✅ Webhook listening on ${PORT}`));
