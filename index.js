@@ -4,8 +4,8 @@ const app = express();
 app.use(express.json());
 
 // Helper to match Entrata's timestamp format & avoid future time errors
-function toEntrataTimestamp(date = new Date()) {
-  date.setMinutes(date.getMinutes() - 1); // 1 minute in the past
+function toEntrataTimestamp() {
+  const date = new Date(Date.now() - 10 * 60 * 1000); // 10 minutes ago
   const pad = n => String(n).padStart(2, "0");
   const mm = pad(date.getMonth() + 1);
   const dd = pad(date.getDate());
@@ -96,4 +96,3 @@ app.get("/", (_req, res) => res.send("OK"));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Webhook listening on ${port}`));
-
