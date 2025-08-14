@@ -1,7 +1,6 @@
 // index.js (CommonJS)
-
 const express = require("express");
-const fetch = require("node-fetch"); // ensure node-fetch is in package.json
+// ⬆️ REMOVE: const fetch = require("node-fetch");
 
 const app = express();
 app.use(express.json());
