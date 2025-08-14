@@ -1,7 +1,5 @@
 // index.js (CommonJS)
 const express = require("express");
-// ⬆️ REMOVE: const fetch = require("node-fetch");
-
 const app = express();
 app.use(express.json());
 
@@ -40,7 +38,7 @@ app.post("/", async (req, res) => {
   const lastName     = pick(raw.lastName, raw.lastname, raw["Last Name"]);
   const email        = pick(raw.email, raw["Email"]);
   const phone        = pick(raw.phone, raw.phoneNumber, raw["Phone"]);
-  const moveInDate   = pick(raw.moveInDate, raw["Move In Date"]); // MM/DD/YYYY (optional)
+  const moveInDate   = pick(raw.moveInDate, raw["Move In Date"]); // optional (MM/DD/YYYY ideal)
   const notes        = pick(raw.notes, raw.message, raw["Message"]); // optional
   const smsOptInFlag = toOptInFlag(pick(raw.smsOptIn, raw.SMS, raw.sms, raw.smsConsent, raw.sms_opt_in));
   const marketingSource = pick(raw.marketingSource, raw.source, DEFAULT_SOURCE);
@@ -50,11 +48,7 @@ app.post("/", async (req, res) => {
   const createdDate = safeCreatedDateISO();
 
   const payload = {
-    auth: {
-      type: "basic",
-      username: ENTRATA_USERNAME,
-      password: ENTRATA_PASSWORD
-    },
+    auth: { type: "basic", username: ENTRATA_USERNAME, password: ENTRATA_PASSWORD },
     requestId: "1",
     method: {
       name: "sendLeads",
@@ -65,8 +59,7 @@ app.post("/", async (req, res) => {
         prospects: {
           prospect: {
             leadSource: {
-              // If/when you get a numeric source id, switch to:
-              // "originatingLeadSourceId": 123
+              // If you later get a numeric source ID, switch to originatingLeadSourceId
               leadSourceName: marketingSource
             },
             createdDate,
@@ -78,9 +71,7 @@ app.post("/", async (req, res) => {
                 },
                 phone: { personalPhoneNumber: phone || "000-000-0000" },
                 email: email || "noemail@example.com",
-                marketingPreferences: {
-                  optInphone: smsOptInFlag   // "1" or "0"
-                }
+                marketingPreferences: { optInphone: smsOptInFlag } // "1" or "0"
               }
             },
             customerPreferences: {
@@ -113,7 +104,7 @@ app.post("/", async (req, res) => {
   }
 });
 
-// Health
+// ── Health route and server start ──────────────────────────────────────
 app.get("/", (_req, res) => res.send("OK"));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Webhook listening on ${PORT}`));
